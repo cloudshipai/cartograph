@@ -14,6 +14,12 @@ import { CartographServer } from "./server"
 import { watch } from "chokidar"
 import { join } from "path"
 
+function openBrowser(url: string) {
+  const platform = process.platform
+  const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open"
+  Bun.spawn([cmd, url], { stdout: "ignore", stderr: "ignore" })
+}
+
 interface CartographState {
   analyzer: CodeAnalyzer
   generator: MdxGenerator
@@ -43,9 +49,10 @@ const CartographPlugin: Plugin = async (ctx) => {
   await state.generator.generate(analysis)
   console.log("[cartograph] Initial analysis complete")
 
-  // Start web server
   await state.server.start()
-  console.log(`[cartograph] Visualization server running at http://localhost:${port}`)
+  console.log(`[cartograph] Visualization running at http://localhost:${port}`)
+
+  openBrowser(`http://localhost:${port}`)
 
   // Watch for file changes
   const ignorePatterns = [
