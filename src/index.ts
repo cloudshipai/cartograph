@@ -1,4 +1,9 @@
-import type { Plugin } from "@opencode-ai/plugin"
+// Top-level logging - if this doesn't appear, the module isn't being imported at all
+console.log("[cartograph] ========================================");
+console.log("[cartograph] Module file loaded at top level");
+console.log("[cartograph] ========================================");
+
+import type { Plugin, Hooks, PluginInput } from "@opencode-ai/plugin"
 import { CodeAnalyzer } from "./analyzer/treesitter"
 import { MdxGenerator } from "./generator/mdx"
 import { CartographServer } from "./server"
@@ -24,6 +29,9 @@ interface CartographState {
 
 const FILE_MODIFYING_TOOLS = ["write", "Write", "edit", "Edit", "bash", "Bash", "MultiEdit"]
 const SUPPORTED_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs"])
+
+// Store tool args by callID to retrieve in after hook
+const pendingToolCalls = new Map<string, unknown>()
 
 /**
  * Extract file paths from tool params. Returns empty array for bash commands
@@ -62,10 +70,15 @@ function extractFilePaths(toolName: string, input: unknown, workspaceDir: string
     })
 }
 
-const CartographPlugin: Plugin = async (ctx) => {
-  const workspaceDir = ctx.directory
+const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
+  console.log("[cartograph] Plugin function called")
+  const { directory } = input
+  const workspaceDir = directory
   const architectureDir = join(workspaceDir, ".architecture")
   const port = 3333
+
+  console.log(`[cartograph] Workspace: ${workspaceDir}`)
+  console.log(`[cartograph] Architecture dir: ${architectureDir}`)
 
   const state: CartographState = {
     analyzer: new CodeAnalyzer(workspaceDir),
@@ -124,15 +137,33 @@ const CartographPlugin: Plugin = async (ctx) => {
     }, debounceMs)
   }
 
-  return {
-    "tool.execute.after": async (input) => {
+  const hooks: Hooks = {
+    event: async ({ event }) => {
+      if (event.type === "server.instance.disposed") {
+        console.log("[cartograph] Shutting down...")
+        if (debounceTimer) clearTimeout(debounceTimer)
+        state.server.stop()
+        console.log("[cartograph] Shutdown complete")
+      }
+    },
+
+    "tool.execute.before": async (input, output) => {
       if (FILE_MODIFYING_TOOLS.some(t => input.tool?.includes(t))) {
-        const changedFiles = extractFilePaths(input.tool || '', input.input, workspaceDir)
+        pendingToolCalls.set(input.callID, output.args)
+      }
+    },
+
+    "tool.execute.after": async (input, _output) => {
+      if (FILE_MODIFYING_TOOLS.some(t => input.tool?.includes(t))) {
+        const args = pendingToolCalls.get(input.callID)
+        pendingToolCalls.delete(input.callID)
+        
+        const changedFiles = extractFilePaths(input.tool || '', args, workspaceDir)
         await triggerReanalysis(`tool: ${input.tool}`, changedFiles)
       }
     },
 
-    "experimental.session.compacting": async (input, output) => {
+    "experimental.session.compacting": async (_input, output) => {
       const recentList = Array.from(state.recentChanges).slice(0, 10)
       const recentStr = recentList.length > 0 
         ? `Recently modified: ${recentList.join(', ')}${state.recentChanges.size > 10 ? ` (+${state.recentChanges.size - 10} more)` : ''}`
@@ -149,7 +180,7 @@ const CartographPlugin: Plugin = async (ctx) => {
       state.recentChanges.clear()
     },
 
-    "chat.message": async (input) => {
+    "chat.message": async (input, _output) => {
       if (input.agent === "user") {
         const timeSinceLastAnalysis = state.lastAnalysis 
           ? Date.now() - state.lastAnalysis.getTime() 
@@ -161,13 +192,10 @@ const CartographPlugin: Plugin = async (ctx) => {
         }
       }
     },
-
-    cleanup: async () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      state.server.stop()
-      console.log("[cartograph] Shutdown complete")
-    },
   }
+
+  console.log("[cartograph] Hooks registered, returning")
+  return hooks
 }
 
-export default CartographPlugin
+export default plugin
