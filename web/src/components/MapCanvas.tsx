@@ -11,22 +11,110 @@ import {
   type NodeMouseHandler,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { LAYER_COLORS, type GraphData, type LayerType } from '../lib/types'
+import { LAYER_COLORS, type GraphData, type LayerType, type ViewMode } from '../lib/types'
 import { FileNode } from './FileNode'
+import { PackageNode } from './PackageNode'
 
 interface MapCanvasProps {
   data: GraphData | null
   loading: boolean
   onNodeClick: (nodeId: string) => void
   selectedNode: string | null
+  viewMode: ViewMode
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const nodeTypes: Record<string, any> = {
   file: FileNode,
+  package: PackageNode,
 }
 
-function layoutNodes(data: GraphData): Node[] {
+import type { GraphNode } from '../lib/types'
+
+interface PackageGroup {
+  id: string
+  name: string
+  layer: string
+  files: GraphNode[]
+}
+
+function groupByPackage(data: GraphData): PackageGroup[] {
+  const packages: Record<string, PackageGroup> = {}
+  
+  data.nodes.forEach(n => {
+    const parts = n.id.split('/')
+    const pkgName = parts.slice(0, 2).join('/') || 'root'
+    
+    if (!packages[pkgName]) {
+      packages[pkgName] = {
+        id: pkgName,
+        name: pkgName,
+        layer: n.layer,
+        files: [],
+      }
+    }
+    packages[pkgName].files.push(n)
+  })
+  
+  return Object.values(packages)
+}
+
+function layoutSystemView(data: GraphData): Node[] {
+  const packages = groupByPackage(data)
+  const nodes: Node[] = []
+  
+  const layerGroups: Record<string, PackageGroup[]> = {}
+  packages.forEach(pkg => {
+    const layer = pkg.files[0]?.layer || 'other'
+    if (!layerGroups[layer]) layerGroups[layer] = []
+    layerGroups[layer].push({ ...pkg, layer })
+  })
+
+  const layerOrder = ['api', 'service', 'model', 'ui', 'util', 'config', 'test', 'other']
+  const sortedLayers = Object.keys(layerGroups).sort(
+    (a, b) => layerOrder.indexOf(a) - layerOrder.indexOf(b)
+  )
+
+  let yOffset = 0
+  const nodeWidth = 200
+  const nodeHeight = 80
+  const nodesPerRow = 4
+  const xGap = 30
+  const yGap = 30
+  const layerGap = 80
+
+  sortedLayers.forEach(layer => {
+    const layerPackages = layerGroups[layer]
+    
+    layerPackages.forEach((pkg, i) => {
+      const row = Math.floor(i / nodesPerRow)
+      const col = i % nodesPerRow
+      
+      nodes.push({
+        id: pkg.id,
+        type: 'package',
+        position: {
+          x: col * (nodeWidth + xGap),
+          y: yOffset + row * (nodeHeight + yGap),
+        },
+        data: {
+          label: pkg.name,
+          layer: pkg.layer,
+          fileCount: pkg.files.length,
+          functions: pkg.files.reduce((sum: number, f: GraphNode) => sum + f.functions, 0),
+          classes: pkg.files.reduce((sum: number, f: GraphNode) => sum + f.classes, 0),
+        },
+      })
+    })
+    
+    const rows = Math.ceil(layerPackages.length / nodesPerRow)
+    yOffset += rows * (nodeHeight + yGap) + layerGap
+  })
+
+  return nodes
+}
+
+function layoutFilesView(data: GraphData): Node[] {
   const layerGroups: Record<string, typeof data.nodes> = {}
   
   data.nodes.forEach(n => {
@@ -79,7 +167,40 @@ function layoutNodes(data: GraphData): Node[] {
   return nodes
 }
 
-function createEdges(data: GraphData): Edge[] {
+function layoutNodes(data: GraphData, viewMode: ViewMode): Node[] {
+  if (viewMode === 'system') {
+    return layoutSystemView(data)
+  }
+  return layoutFilesView(data)
+}
+
+function createEdges(data: GraphData, viewMode: ViewMode): Edge[] {
+  if (viewMode === 'system') {
+    const pkgEdges: Map<string, Edge> = new Map()
+    
+    data.edges.forEach((e) => {
+      const sourceParts = e.source.split('/')
+      const targetParts = e.target.split('/')
+      const sourcePkg = sourceParts.slice(0, 2).join('/') || 'root'
+      const targetPkg = targetParts.slice(0, 2).join('/') || 'root'
+      
+      if (sourcePkg !== targetPkg) {
+        const key = `${sourcePkg}-${targetPkg}`
+        if (!pkgEdges.has(key)) {
+          pkgEdges.set(key, {
+            id: `e-pkg-${key}`,
+            source: sourcePkg,
+            target: targetPkg,
+            animated: true,
+            style: { stroke: '#555', strokeWidth: 2 },
+          })
+        }
+      }
+    })
+    
+    return Array.from(pkgEdges.values())
+  }
+  
   return data.edges.map((e, i) => ({
     id: `e-${i}`,
     source: e.source,
@@ -89,19 +210,19 @@ function createEdges(data: GraphData): Edge[] {
   }))
 }
 
-export function MapCanvas({ data, loading, onNodeClick, selectedNode: _selectedNode }: MapCanvasProps) {
-  const initialNodes = useMemo(() => (data ? layoutNodes(data) : []), [data])
-  const initialEdges = useMemo(() => (data ? createEdges(data) : []), [data])
+export function MapCanvas({ data, loading, onNodeClick, selectedNode: _selectedNode, viewMode }: MapCanvasProps) {
+  const initialNodes = useMemo(() => (data ? layoutNodes(data, viewMode) : []), [data, viewMode])
+  const initialEdges = useMemo(() => (data ? createEdges(data, viewMode) : []), [data, viewMode])
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
 
   useMemo(() => {
     if (data) {
-      setNodes(layoutNodes(data))
-      setEdges(createEdges(data))
+      setNodes(layoutNodes(data, viewMode))
+      setEdges(createEdges(data, viewMode))
     }
-  }, [data, setNodes, setEdges])
+  }, [data, viewMode, setNodes, setEdges])
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_, node) => onNodeClick(node.id),
