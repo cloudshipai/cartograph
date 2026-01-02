@@ -1,7 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "openai/gpt-4o-mini",
-  "plugin": [
-    "file:///root/.config/opencode/plugin/cartograph-plugin.js"
-  ]
+  "autoApprove": true
 }

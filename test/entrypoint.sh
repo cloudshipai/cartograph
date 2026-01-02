@@ -33,6 +33,11 @@ echo "Workspace contents:"
 ls -la /workspaces/sample-project/ 2>/dev/null || echo "  (empty or not mounted)"
 echo ""
 
+echo "=== Testing Plugin Import with Bun ==="
+echo "Attempting to import the plugin directly with Bun to check for errors:"
+bun -e "import('/root/.config/opencode/plugin/cartograph-plugin.js').then(m => console.log('Plugin loaded successfully:', Object.keys(m))).catch(e => console.error('Plugin import failed:', e))" 2>&1 || echo "Bun import test failed"
+echo ""
+
 echo "=== Starting OpenCode server ==="
 echo "Command: opencode serve --port 4096 --hostname 0.0.0.0 --print-logs --log-level DEBUG"
 exec opencode serve --port 4096 --hostname 0.0.0.0 --print-logs --log-level DEBUG
