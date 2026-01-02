@@ -33,84 +33,102 @@ export class CartographServer {
 
   async start(): Promise<void> {
     const self = this
+    let retries = 5
+    const delay = 500
 
-    this.server = Bun.serve<WebSocketData>({
-      port: this.port,
+    while (retries > 0) {
+      try {
+        this.server = Bun.serve<WebSocketData>({
+          port: this.port,
 
-      async fetch(req, server) {
-        const url = new URL(req.url)
-        const path = url.pathname
+          async fetch(req, server) {
+            const url = new URL(req.url)
+            const path = url.pathname
 
-        if (path === "/ws") {
-          const upgraded = server.upgrade(req, {
-            data: { id: crypto.randomUUID() },
-          })
-          return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 })
-        }
+            if (path === "/ws") {
+              const upgraded = server.upgrade(req, {
+                data: { id: crypto.randomUUID() },
+              })
+              return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 })
+            }
 
-        if (path === "/api/graph") {
-          try {
-            const data = await readFile(join(self.architectureDir, "graph.json"), "utf-8")
-            return new Response(data, {
-              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+            if (path === "/api/graph") {
+              try {
+                const data = await readFile(join(self.architectureDir, "graph.json"), "utf-8")
+                return new Response(data, {
+                  headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+                })
+              } catch {
+                return new Response(JSON.stringify({ nodes: [], edges: [] }), {
+                  headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+                })
+              }
+            }
+
+            if (path === "/api/manifest") {
+              try {
+                const data = await readFile(join(self.architectureDir, "manifest.json"), "utf-8")
+                return new Response(data, {
+                  headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+                })
+              } catch {
+                return new Response("{}", {
+                  headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+                })
+              }
+            }
+
+            if (path.startsWith("/api/maps/")) {
+              const file = path.replace("/api/maps/", "")
+              try {
+                const data = await readFile(join(self.architectureDir, "maps", file), "utf-8")
+                return new Response(data, {
+                  headers: { "Content-Type": "text/markdown", "Access-Control-Allow-Origin": "*" },
+                })
+              } catch {
+                return new Response("Not found", { status: 404 })
+              }
+            }
+
+            const staticResponse = await self.serveStatic(path)
+            if (staticResponse) return staticResponse
+
+            if (path === "/" || !path.includes(".")) {
+              const indexResponse = await self.serveStatic("/index.html")
+              if (indexResponse) return indexResponse
+            }
+
+            return new Response(self.getFallbackHtml(), {
+              headers: { "Content-Type": "text/html" },
             })
-          } catch {
-            return new Response(JSON.stringify({ nodes: [], edges: [] }), {
-              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-            })
-          }
-        }
+          },
 
-        if (path === "/api/manifest") {
-          try {
-            const data = await readFile(join(self.architectureDir, "manifest.json"), "utf-8")
-            return new Response(data, {
-              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-            })
-          } catch {
-            return new Response("{}", {
-              headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-            })
-          }
-        }
-
-        if (path.startsWith("/api/maps/")) {
-          const file = path.replace("/api/maps/", "")
-          try {
-            const data = await readFile(join(self.architectureDir, "maps", file), "utf-8")
-            return new Response(data, {
-              headers: { "Content-Type": "text/markdown", "Access-Control-Allow-Origin": "*" },
-            })
-          } catch {
-            return new Response("Not found", { status: 404 })
-          }
-        }
-
-        const staticResponse = await self.serveStatic(path)
-        if (staticResponse) return staticResponse
-
-        if (path === "/" || !path.includes(".")) {
-          const indexResponse = await self.serveStatic("/index.html")
-          if (indexResponse) return indexResponse
-        }
-
-        return new Response(self.getFallbackHtml(), {
-          headers: { "Content-Type": "text/html" },
+          websocket: {
+            open(ws) {
+              self.clients.add(ws)
+              console.log(`[cartograph] Client connected (${self.clients.size} total)`)
+            },
+            close(ws) {
+              self.clients.delete(ws)
+              console.log(`[cartograph] Client disconnected (${self.clients.size} total)`)
+            },
+            message() {},
+          },
         })
-      },
+        
+        return
+      } catch (err: any) {
+        if (err.message?.includes("Address in use") || err.code === "EADDRINUSE") {
+          console.warn(`[cartograph] Port ${this.port} busy, retrying in ${delay}ms... (${retries} left)`)
+          retries--
+          await new Promise(resolve => setTimeout(resolve, delay))
+        } else {
+          throw err
+        }
+      }
+    }
 
-      websocket: {
-        open(ws) {
-          self.clients.add(ws)
-          console.log(`[cartograph] Client connected (${self.clients.size} total)`)
-        },
-        close(ws) {
-          self.clients.delete(ws)
-          console.log(`[cartograph] Client disconnected (${self.clients.size} total)`)
-        },
-        message() {},
-      },
-    })
+    throw new Error(`[cartograph] Failed to start server on port ${this.port} after multiple retries`)
   }
 
   private async serveStatic(path: string): Promise<Response | null> {
@@ -135,7 +153,7 @@ export class CartographServer {
 
   stop(): void {
     if (this.server) {
-      this.server.stop()
+      this.server.stop(true)
       this.server = null
     }
   }

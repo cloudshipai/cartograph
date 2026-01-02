@@ -1,5 +1,5 @@
 /**
- * Code Analyzer using tree-sitter for AST parsing
+ * Code Analyzer using regex-based parsing
  * Detects: imports, exports, functions, classes, and their relationships
  */
 
