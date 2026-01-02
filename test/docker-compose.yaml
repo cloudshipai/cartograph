@@ -1,0 +1,28 @@
+services:
+  opencode:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.opencode
+    environment:
+      - OPENCODE_WORKSPACE_DIR=/workspaces
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - opencode-workspaces:/workspaces
+      # Mount sample project for testing
+      - ./sample-project:/workspaces/sample-project
+    ports:
+      # OpenCode API - use 4098 to avoid clash with station's 4097
+      - "4098:4096"
+      # Cartograph web UI - map 3334 to avoid potential conflicts
+      - "3334:3333"
+    working_dir: /workspaces/sample-project
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4096/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  opencode-workspaces:

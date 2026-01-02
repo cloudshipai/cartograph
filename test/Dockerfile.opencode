@@ -1,0 +1,35 @@
+FROM ghcr.io/sst/opencode:latest
+
+# Install Bun runtime for plugins and git for workspace operations
+RUN apk add --no-cache curl unzip bash git \
+    && curl -fsSL https://bun.sh/install | bash \
+    && ln -s /root/.bun/bin/bun /usr/local/bin/bun \
+    && ln -s /root/.bun/bin/bunx /usr/local/bin/bunx
+
+# Create plugin and config directories
+# OpenCode scans ~/.config/opencode/plugin/ for local plugins at startup
+RUN mkdir -p /root/.config/opencode/plugin \
+    && mkdir -p /root/.opencode
+
+# Copy the built plugin to the local plugin directory
+COPY dist/index.js /root/.config/opencode/plugin/cartograph-plugin.js
+
+# Copy the built web UI
+COPY dist/web /root/.config/opencode/plugin/web
+
+# Copy the entrypoint script
+COPY test/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Create default config
+COPY test/opencode.json /root/.config/opencode/opencode.json
+
+# Create a sample workspace for testing
+RUN mkdir -p /workspaces/sample-project/src
+
+WORKDIR /workspaces/sample-project
+
+# Expose OpenCode API port (4096) and Cartograph web UI port (3333)
+EXPOSE 4096 3333
+
+ENTRYPOINT ["/entrypoint.sh"]
