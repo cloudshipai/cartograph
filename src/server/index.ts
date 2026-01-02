@@ -28,7 +28,10 @@ export class CartographServer {
     private port: number,
     private architectureDir: string
   ) {
-    this.webDistDir = join(import.meta.dir, "../../dist/web")
+    const dir = import.meta.dir
+    this.webDistDir = dir.includes("/dist") 
+      ? join(dir, "web")
+      : join(dir, "../../dist/web")
   }
 
   async start(): Promise<void> {

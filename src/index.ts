@@ -90,14 +90,22 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
 
   await Bun.write(join(architectureDir, ".gitkeep"), "")
 
-  console.log("[cartograph] Starting initial codebase analysis...")
-  const analysis = await state.analyzer.analyze()
-  await state.generator.generate(analysis)
-  state.lastAnalysis = new Date()
-  console.log("[cartograph] Initial analysis complete")
-
   await state.server.start()
-  console.log(`[cartograph] Visualization running at http://localhost:${port}`)
+  console.log(`[cartograph] Ready at http://localhost:${port}`)
+
+  setImmediate(async () => {
+    try {
+      const startTime = Date.now()
+      const analysis = await state.analyzer.analyze()
+      await state.generator.generate(analysis)
+      state.lastAnalysis = new Date()
+      state.server.broadcastUpdate(analysis)
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+      console.log(`[cartograph] Analyzed ${analysis.files.length} files in ${elapsed}s`)
+    } catch (err) {
+      console.error("[cartograph] Analysis failed:", err)
+    }
+  })
 
   openBrowser(`http://localhost:${port}`)
 
