@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0f0f1a;
+  color: #e0e0e0;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+}
+
+.react-flow__node {
+  font-size: 11px;
+}
+
+.react-flow__edge-path {
+  stroke: #444;
+  stroke-width: 1;
+}
+
+.react-flow__edge.animated path {
+  stroke-dasharray: 5;
+  animation: dash 0.5s linear infinite;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
