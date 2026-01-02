@@ -19,7 +19,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -27,13 +26,13 @@ jobs:
           bun-version: latest
 
       - name: Install plugin dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build plugin
         run: npm run build
 
       - name: Install web UI dependencies
-        run: npm ci
+        run: npm install
         working-directory: web
 
       - name: Build web UI
