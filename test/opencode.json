@@ -1,5 +1,4 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openai/gpt-4o-mini",
-  "autoApprove": true
+  "model": "openai/gpt-4o-mini"
 }
