@@ -8,6 +8,13 @@ interface HealthCheck {
 }
 
 const healthChecks: HealthCheck[] = [
+  // IMPORTANT: OpenCode must be hit FIRST to trigger plugin initialization
+  // Plugins are loaded lazily when the first request comes in (middleware pattern)
+  {
+    name: "OpenCode Server (triggers plugin init)",
+    url: `${OPENCODE_URL}/session`,
+    validate: (res) => res.status !== 502, // Any non-gateway error means server is up
+  },
   {
     name: "Cartograph Web UI",
     url: CARTOGRAPH_URL,
