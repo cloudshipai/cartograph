@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "^0.1.0",
-    "chokidar": "^4.0.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {

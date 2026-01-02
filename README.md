@@ -54,10 +54,11 @@ Open `http://localhost:3333` after installing:
 ## How It Works
 
 1. Plugin loads → starts web server on `:3333`
-2. Initial scan using tree-sitter for AST parsing
+2. Initial scan using regex-based parsing for imports/exports/functions/classes
 3. Generates `.architecture/` folder with MDX docs and graph data
-4. Watches for file changes via chokidar
-5. Re-analyzes on change → pushes update via WebSocket → UI refreshes
+4. Hooks into OpenCode lifecycle events (`tool.execute.after`, `session.compacting`)
+5. Incremental re-analysis of changed files → pushes update via WebSocket → UI refreshes
+6. Injects architecture context during session compaction for agent awareness
 
 ## Roadmap
 

@@ -3,7 +3,7 @@
  * Detects: imports, exports, functions, classes, and their relationships
  */
 
-import { readdir, readFile, stat } from "fs/promises"
+import { readdir, readFile } from "fs/promises"
 import { join, extname, relative } from "path"
 
 export interface FileAnalysis {
@@ -72,6 +72,9 @@ const IGNORE_DIRS = new Set([
 ])
 
 export class CodeAnalyzer {
+  private lastAnalysis: CodebaseAnalysis | null = null
+  private fileCache: Map<string, FileAnalysis> = new Map()
+
   constructor(private workspaceDir: string) {}
 
   async analyze(): Promise<CodebaseAnalysis> {
@@ -81,7 +84,10 @@ export class CodeAnalyzer {
     for (const filePath of files) {
       try {
         const analysis = await this.analyzeFile(filePath)
-        if (analysis) analyses.push(analysis)
+        if (analysis) {
+          analyses.push(analysis)
+          this.fileCache.set(analysis.relativePath, analysis)
+        }
       } catch (e) {
         console.warn(`[cartograph] Failed to analyze ${filePath}:`, e)
       }
@@ -90,12 +96,47 @@ export class CodeAnalyzer {
     const dependencyGraph = this.buildDependencyGraph(analyses)
     const layerMap = this.detectLayers(analyses)
 
-    return {
+    this.lastAnalysis = {
       timestamp: new Date(),
       files: analyses,
       dependencyGraph,
       layerMap,
     }
+
+    return this.lastAnalysis
+  }
+
+  async analyzeIncremental(changedPaths: string[]): Promise<CodebaseAnalysis> {
+    for (const relativePath of changedPaths) {
+      const fullPath = join(this.workspaceDir, relativePath)
+      try {
+        const analysis = await this.analyzeFile(fullPath)
+        if (analysis) {
+          this.fileCache.set(relativePath, analysis)
+        } else {
+          this.fileCache.delete(relativePath)
+        }
+      } catch {
+        this.fileCache.delete(relativePath)
+      }
+    }
+
+    const analyses = Array.from(this.fileCache.values())
+    const dependencyGraph = this.buildDependencyGraph(analyses)
+    const layerMap = this.detectLayers(analyses)
+
+    this.lastAnalysis = {
+      timestamp: new Date(),
+      files: analyses,
+      dependencyGraph,
+      layerMap,
+    }
+
+    return this.lastAnalysis
+  }
+
+  getLastAnalysis(): CodebaseAnalysis | null {
+    return this.lastAnalysis
   }
 
   private async collectFiles(dir: string = this.workspaceDir): Promise<string[]> {
