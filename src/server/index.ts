@@ -2,6 +2,7 @@ import { readFile, stat } from "fs/promises"
 import { join, extname } from "path"
 import type { CodebaseAnalysis } from "../analyzer/treesitter"
 import type { Server, ServerWebSocket } from "bun"
+import { log } from "../logger"
 
 interface WebSocketData {
   id: string
@@ -109,11 +110,11 @@ export class CartographServer {
           websocket: {
             open(ws) {
               self.clients.add(ws)
-              console.log(`[cartograph] Client connected (${self.clients.size} total)`)
+              log(`Client connected (${self.clients.size} total)`)
             },
             close(ws) {
               self.clients.delete(ws)
-              console.log(`[cartograph] Client disconnected (${self.clients.size} total)`)
+              log(`Client disconnected (${self.clients.size} total)`)
             },
             message() {},
           },
@@ -122,7 +123,7 @@ export class CartographServer {
         return
       } catch (err: any) {
         if (err.message?.includes("Address in use") || err.code === "EADDRINUSE") {
-          console.warn(`[cartograph] Port ${this.port} busy, retrying in ${delay}ms... (${retries} left)`)
+          log(`Port ${this.port} busy, retrying in ${delay}ms... (${retries} left)`)
           retries--
           await new Promise(resolve => setTimeout(resolve, delay))
         } else {

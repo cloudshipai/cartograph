@@ -1,10 +1,6 @@
-/**
- * Code Analyzer using regex-based parsing
- * Detects: imports, exports, functions, classes, and their relationships
- */
-
 import { readdir, readFile } from "fs/promises"
 import { join, extname, relative } from "path"
+import { log } from "../logger"
 
 export interface FileAnalysis {
   path: string
@@ -89,7 +85,7 @@ export class CodeAnalyzer {
           this.fileCache.set(analysis.relativePath, analysis)
         }
       } catch (e) {
-        console.warn(`[cartograph] Failed to analyze ${filePath}:`, e)
+        log(`Failed to analyze ${filePath}: ${e}`)
       }
     }
 

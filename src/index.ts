@@ -1,9 +1,5 @@
-// Top-level logging - if this doesn't appear, the module isn't being imported at all
-console.log("[cartograph] ========================================");
-console.log("[cartograph] Module file loaded at top level");
-console.log("[cartograph] ========================================");
-
 import type { Plugin, Hooks, PluginInput } from "@opencode-ai/plugin"
+import { log, logError } from "./logger"
 import { CodeAnalyzer } from "./analyzer/treesitter"
 import { MdxGenerator } from "./generator/mdx"
 import { CartographServer } from "./server"
@@ -71,14 +67,14 @@ function extractFilePaths(toolName: string, input: unknown, workspaceDir: string
 }
 
 const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
-  console.log("[cartograph] Plugin function called")
+  log("Plugin initialized")
   const { directory } = input
   const workspaceDir = directory
   const architectureDir = join(workspaceDir, ".architecture")
   const port = 3333
 
-  console.log(`[cartograph] Workspace: ${workspaceDir}`)
-  console.log(`[cartograph] Architecture dir: ${architectureDir}`)
+  log(`Workspace: ${workspaceDir}`)
+  log(`Architecture dir: ${architectureDir}`)
 
   const state: CartographState = {
     analyzer: new CodeAnalyzer(workspaceDir),
@@ -91,7 +87,7 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
   await Bun.write(join(architectureDir, ".gitkeep"), "")
 
   await state.server.start()
-  console.log(`[cartograph] Ready at http://localhost:${port}`)
+  log(`Ready at http://localhost:${port}`)
 
   setImmediate(async () => {
     try {
@@ -101,9 +97,9 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
       state.lastAnalysis = new Date()
       state.server.broadcastUpdate(analysis)
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-      console.log(`[cartograph] Analyzed ${analysis.files.length} files in ${elapsed}s`)
+      log(`Analyzed ${analysis.files.length} files in ${elapsed}s`)
     } catch (err) {
-      console.error("[cartograph] Analysis failed:", err)
+      logError("Analysis failed", err)
     }
   })
 
@@ -126,12 +122,12 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
       const useIncremental = filesToAnalyze.length > 0 && filesToAnalyze.length <= 20
       
       if (useIncremental) {
-        console.log(`[cartograph] Incremental analysis (${reason}): ${filesToAnalyze.length} files`)
+        log(`Incremental analysis (${reason}): ${filesToAnalyze.length} files`)
         const analysis = await state.analyzer.analyzeIncremental(filesToAnalyze)
         await state.generator.generate(analysis)
         filesToAnalyze.forEach(f => state.recentChanges.add(f))
       } else {
-        console.log(`[cartograph] Full re-analysis (${reason})...`)
+        log(`Full re-analysis (${reason})...`)
         const analysis = await state.analyzer.analyze()
         await state.generator.generate(analysis)
         state.recentChanges.clear()
@@ -148,10 +144,10 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
   const hooks: Hooks = {
     event: async ({ event }) => {
       if (event.type === "server.instance.disposed") {
-        console.log("[cartograph] Shutting down...")
+        log("Shutting down...")
         if (debounceTimer) clearTimeout(debounceTimer)
         state.server.stop()
-        console.log("[cartograph] Shutdown complete")
+        log("Shutdown complete")
       }
     },
 
@@ -202,7 +198,7 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
     },
   }
 
-  console.log("[cartograph] Hooks registered, returning")
+  log("Hooks registered")
   return hooks
 }
 
