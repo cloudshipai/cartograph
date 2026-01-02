@@ -21,7 +21,8 @@ interface MapCanvasProps {
   selectedNode: string | null
 }
 
-const nodeTypes = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const nodeTypes: Record<string, any> = {
   file: FileNode,
 }
 
@@ -88,7 +89,7 @@ function createEdges(data: GraphData): Edge[] {
   }))
 }
 
-export function MapCanvas({ data, loading, onNodeClick, selectedNode }: MapCanvasProps) {
+export function MapCanvas({ data, loading, onNodeClick, selectedNode: _selectedNode }: MapCanvasProps) {
   const initialNodes = useMemo(() => (data ? layoutNodes(data) : []), [data])
   const initialEdges = useMemo(() => (data ? createEdges(data) : []), [data])
 

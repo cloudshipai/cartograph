@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Handle, Position } from '@xyflow/react'
 import { LAYER_COLORS, type LayerType } from '../lib/types'
 
 interface FileNodeData {
@@ -10,7 +10,11 @@ interface FileNodeData {
   exports: number
 }
 
-export const FileNode = memo(function FileNode({ data }: NodeProps<FileNodeData>) {
+interface FileNodeProps {
+  data: FileNodeData
+}
+
+export const FileNode = memo(function FileNode({ data }: FileNodeProps) {
   const layer = data.layer as LayerType
   const borderColor = LAYER_COLORS[layer] || LAYER_COLORS.other
 

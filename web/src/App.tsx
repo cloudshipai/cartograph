@@ -6,10 +6,10 @@ import { Legend } from './components/Legend'
 import { Sidebar } from './components/Sidebar'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useGraphData } from './hooks/useGraphData'
-import type { GraphData, Manifest } from './lib/types'
+import type { Manifest } from './lib/types'
 
 export default function App() {
-  const [manifest, setManifest] = useState<Manifest | null>(null)
+  const [_manifest, setManifest] = useState<Manifest | null>(null)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   
   const { data: graphData, loading, error, refetch } = useGraphData()
