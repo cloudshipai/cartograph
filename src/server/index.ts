@@ -17,7 +17,7 @@ const MIME_TYPES: Record<string, string> = {
 }
 
 export class CartographServer {
-  private server: Server | null = null
+  private server: Server<WebSocketData> | null = null
   private clients = new Set<ServerWebSocket<WebSocketData>>()
   private webDistDir: string
 

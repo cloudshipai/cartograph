@@ -147,15 +147,16 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
 
       globalWorker = createWorker()
       globalWorker.onmessage = async (event) => {
-        lastAnalysis = event.data
-        log(`Analysis complete: ${lastAnalysis.files.length} files`)
+        const analysis = event.data as AnalysisResult
+        lastAnalysis = analysis
+        log(`Analysis complete: ${analysis.files.length} files`)
         
         await Bun.write(
           join(architectureDir, "analysis.json"),
-          JSON.stringify(lastAnalysis, null, 2)
+          JSON.stringify(analysis, null, 2)
         )
         
-        const autoDiagrams = generateDiagramsFromAnalysis(lastAnalysis)
+        const autoDiagrams = generateDiagramsFromAnalysis(analysis)
         if (autoDiagrams.length > 0) {
           const existingNonAuto = currentDiagrams?.diagrams.filter(
             d => !d.labels.includes("auto")
