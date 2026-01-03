@@ -1,6 +1,6 @@
 {
   "name": "cartograph",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Visual codebase mapping plugin for OpenCode - auto-generates architecture diagrams as you code",
   "type": "module",
   "main": "dist/index.js",
