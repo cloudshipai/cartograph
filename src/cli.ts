@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 
-const PLUGIN_NAME = "cartograph"
+const PLUGIN_NAME = "@cloudshipai/cartograph"
 const CONFIG_PATHS = [
   join(homedir(), ".config", "opencode", "opencode.json"),
   join(homedir(), ".opencode", "opencode.json"),

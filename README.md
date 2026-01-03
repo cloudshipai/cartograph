@@ -14,7 +14,7 @@ Cartograph runs silently in the background while you use OpenCode. No commands t
 ## Quick Install
 
 ```bash
-bunx cartograph install
+bunx @cloudshipai/cartograph install
 ```
 
 That's it! The installer automatically adds Cartograph to your OpenCode config.
@@ -49,7 +49,7 @@ Open `http://localhost:3333` after installing:
 ### Option 1: One-liner (Recommended)
 
 ```bash
-bunx cartograph install
+bunx @cloudshipai/cartograph install
 ```
 
 ### Option 2: Manual Config
@@ -69,7 +69,7 @@ git clone https://github.com/cloudshipai/cartograph.git
 cd cartograph
 bun install
 bun run build
-bunx cartograph install
+bunx @cloudshipai/cartograph install
 ```
 
 ---
@@ -109,7 +109,7 @@ If you're an AI assistant helping a user, Cartograph provides these tools:
 
 ```bash
 # 1. Install Cartograph
-bunx cartograph install
+bunx @cloudshipai/cartograph install
 
 # 2. Verify config was updated
 cat ~/.config/opencode/opencode.json
@@ -126,7 +126,7 @@ curl -s http://localhost:3333/api/health
 ## Uninstall
 
 ```bash
-bunx cartograph uninstall
+bunx @cloudshipai/cartograph uninstall
 ```
 
 ---
