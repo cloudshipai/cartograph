@@ -1,200 +1,311 @@
 import type { Plugin, Hooks, PluginInput } from "@opencode-ai/plugin"
+import type { createOpencodeClient } from "@opencode-ai/sdk"
+import { tool } from "@opencode-ai/plugin"
 import { log, logError } from "./logger"
-import { CodeAnalyzer } from "./analyzer/treesitter"
-import { MdxGenerator } from "./generator/mdx"
 import { CartographServer } from "./server"
-import { join, relative, isAbsolute } from "path"
+import { join, dirname } from "path"
+import { realpathSync } from "fs"
+import {
+  DIAGRAM_TYPES,
+  generateDiagramsFromAnalysis,
+  buildDiagramContext,
+  createDiagramRecord,
+  mergeDiagrams,
+  mapTypeToCategory,
+  type DiagramType,
+  type DiagramRecord,
+  type DiagramSet,
+  type AnalysisResult,
+} from "./diagrams"
 
-function openBrowser(url: string) {
+type OpencodeClient = ReturnType<typeof createOpencodeClient>
+
+let globalServer: CartographServer | null = null
+let globalWorker: Worker | null = null
+let globalClient: OpencodeClient | null = null
+let lastAnalysis: AnalysisResult | null = null
+let currentDiagrams: DiagramSet | null = null
+let architectureDir: string = ""
+let serverPort: number = 3333
+
+
+
+async function loadExistingDiagrams(): Promise<void> {
   try {
-    const platform = process.platform
-    const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open"
-    Bun.spawn([cmd, url], { stdout: "ignore", stderr: "ignore" })
-  } catch {
-    // Ignore - browser opening is best-effort (may fail in Docker/headless)
+    const diagramsPath = join(architectureDir, "diagrams.json")
+    const file = Bun.file(diagramsPath)
+    if (await file.exists()) {
+      currentDiagrams = await file.json() as DiagramSet
+      log(`Loaded ${currentDiagrams.diagrams.length} existing diagrams`)
+    }
+  } catch (err) {
+    logError("Failed to load existing diagrams", err)
   }
 }
 
-interface CartographState {
-  analyzer: CodeAnalyzer
-  generator: MdxGenerator
-  server: CartographServer
-  lastAnalysis: Date | null
-  recentChanges: Set<string>
+async function saveDiagrams(diagrams: DiagramRecord[], reason: string): Promise<void> {
+  const diagramSet: DiagramSet = {
+    generated: new Date().toISOString(),
+    hash: Date.now().toString(36),
+    diagrams: diagrams.sort((a, b) => b.priority - a.priority),
+    summary: `${diagrams.length} diagrams`,
+    ...(reason === "compaction" ? { lastCompactionUpdate: new Date().toISOString() } : {}),
+  }
+  
+  currentDiagrams = diagramSet
+  const diagramsPath = join(architectureDir, "diagrams.json")
+  await Bun.write(diagramsPath, JSON.stringify(diagramSet, null, 2))
+  globalServer?.broadcast(JSON.stringify({ type: "update", data: { reason } }))
 }
 
-const FILE_MODIFYING_TOOLS = ["write", "Write", "edit", "Edit", "bash", "Bash", "MultiEdit"]
-const SUPPORTED_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs"])
 
-// Store tool args by callID to retrieve in after hook
-const pendingToolCalls = new Map<string, unknown>()
 
-/**
- * Extract file paths from tool params. Returns empty array for bash commands
- * that might modify files (triggers full reanalysis since we can't know which files).
- */
-function extractFilePaths(toolName: string, input: unknown, workspaceDir: string): string[] {
-  const paths: string[] = []
+async function triggerDiagramUpdateSubtask(sessionId: string): Promise<void> {
+  if (!globalClient) {
+    logError("No client for subtask")
+    return
+  }
+
+  const context = buildDiagramContext(lastAnalysis, currentDiagrams)
+  const existingDiagramIds = currentDiagrams?.diagrams.map(d => d.id).join(", ") || "none"
   
+  const subtaskPrompt = `Based on our conversation, check if any architecture diagrams need updating.
+
+${context}
+
+Current diagram IDs: ${existingDiagramIds}
+
+If you discussed architectural changes, new components, or data flow patterns that aren't reflected in the diagrams:
+1. Generate appropriate Mermaid diagram(s)
+2. Call diagram_update tool for each diagram
+
+If no updates needed, just respond briefly that diagrams are current.`
+
   try {
-    const params = typeof input === 'string' ? JSON.parse(input) : input
-    
-    if (params?.filePath) {
-      paths.push(params.filePath)
-    }
-    
-    if (Array.isArray(params?.edits)) {
-      for (const edit of params.edits) {
-        if (edit?.filePath) paths.push(edit.filePath)
+    log(`Triggering diagram update subtask for session ${sessionId}`)
+    await globalClient.session.promptAsync({
+      path: { id: sessionId },
+      body: {
+        parts: [{
+          type: "subtask",
+          prompt: subtaskPrompt,
+          description: "Update architecture diagrams based on recent conversation",
+          agent: "build",
+        }],
       }
-    }
-    
-    if (toolName.toLowerCase().includes('bash') && params?.command) {
-      const cmd = params.command
-      const fileOps = /(?:touch|>|>>|mv|cp)\s+|git\s+(?:checkout|reset|stash\s+pop)/
-      if (fileOps.test(cmd)) return []
-    }
-  } catch {
-    return []
-  }
-  
-  return paths
-    .map(p => isAbsolute(p) ? relative(workspaceDir, p) : p)
-    .filter(p => {
-      const ext = p.substring(p.lastIndexOf('.'))
-      return SUPPORTED_EXTENSIONS.has(ext) && !p.startsWith('..')
     })
+    log("Diagram update subtask dispatched")
+  } catch (err) {
+    logError("Failed to dispatch diagram subtask", err)
+  }
+}
+
+function createWorker(): Worker {
+  const resolvedPluginPath = realpathSync(import.meta.path)
+  const pluginDistDir = dirname(resolvedPluginPath)
+  const workerPath = join(pluginDistDir, "worker", "analyzer.worker.js")
+  log(`Worker path: ${workerPath}`)
+  return new Worker(workerPath)
+}
+
+function openBrowser(url: string): void {
+  const platform = process.platform
+  const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open"
+  Bun.spawn([cmd, url], { stdout: "ignore", stderr: "ignore" })
+}
+
+async function findAvailablePort(startPort: number): Promise<number> {
+  for (let port = startPort; port < startPort + 100; port++) {
+    try {
+      const server = Bun.serve({ port, fetch: () => new Response("") })
+      server.stop(true)
+      return port
+    } catch {
+      continue
+    }
+  }
+  return startPort
 }
 
 const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
-  log("Plugin initialized")
-  const { directory } = input
-  const workspaceDir = directory
-  const architectureDir = join(workspaceDir, ".architecture")
-  const port = 3333
+  const { directory, client } = input
+  architectureDir = join(directory, ".architecture")
 
-  log(`Workspace: ${workspaceDir}`)
-  log(`Architecture dir: ${architectureDir}`)
-
-  const state: CartographState = {
-    analyzer: new CodeAnalyzer(workspaceDir),
-    generator: new MdxGenerator(architectureDir),
-    server: new CartographServer(port, architectureDir),
-    lastAnalysis: null,
-    recentChanges: new Set(),
-  }
-
-  await Bun.write(join(architectureDir, ".gitkeep"), "")
-
-  await state.server.start()
-  log(`Ready at http://localhost:${port}`)
+  globalClient = client
+  log("Cartograph initializing")
 
   setImmediate(async () => {
     try {
-      const startTime = Date.now()
-      const analysis = await state.analyzer.analyze()
-      await state.generator.generate(analysis)
-      state.lastAnalysis = new Date()
-      state.server.broadcastUpdate(analysis)
-      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-      log(`Analyzed ${analysis.files.length} files in ${elapsed}s`)
+      await Bun.write(join(architectureDir, ".gitkeep"), "")
+      await loadExistingDiagrams()
+      
+      serverPort = await findAvailablePort(3333)
+      globalServer = new CartographServer(serverPort, architectureDir)
+      await globalServer.start()
+      log(`Server ready at http://localhost:${serverPort}`)
+      openBrowser(`http://localhost:${serverPort}`)
+
+      globalWorker = createWorker()
+      globalWorker.onmessage = async (event) => {
+        lastAnalysis = event.data
+        log(`Analysis complete: ${lastAnalysis.files.length} files`)
+        
+        await Bun.write(
+          join(architectureDir, "analysis.json"),
+          JSON.stringify(lastAnalysis, null, 2)
+        )
+        
+        const autoDiagrams = generateDiagramsFromAnalysis(lastAnalysis)
+        if (autoDiagrams.length > 0) {
+          const existingNonAuto = currentDiagrams?.diagrams.filter(
+            d => !d.labels.includes("auto")
+          ) || []
+          
+          const merged = [...autoDiagrams, ...existingNonAuto]
+          await saveDiagrams(merged, "analysis")
+          log(`Auto-generated ${autoDiagrams.length} diagrams from analysis`)
+        }
+        
+        globalServer?.broadcast(JSON.stringify({ type: "analysis", data: lastAnalysis }))
+      }
+
+      globalWorker.postMessage({ type: "analyze", workspaceDir: directory })
+      log("Initial analysis started in worker")
     } catch (err) {
-      logError("Analysis failed", err)
+      logError("Init failed", err)
     }
   })
-
-  openBrowser(`http://localhost:${port}`)
-
-  let debounceTimer: Timer | null = null
-  const debounceMs = 2000
-  let pendingFiles: Set<string> = new Set()
-
-  const triggerReanalysis = async (reason: string, changedFiles?: string[]) => {
-    if (changedFiles && changedFiles.length > 0) {
-      changedFiles.forEach(f => pendingFiles.add(f))
-    }
-    
-    if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(async () => {
-      const filesToAnalyze = Array.from(pendingFiles)
-      pendingFiles = new Set()
-      
-      const useIncremental = filesToAnalyze.length > 0 && filesToAnalyze.length <= 20
-      
-      if (useIncremental) {
-        log(`Incremental analysis (${reason}): ${filesToAnalyze.length} files`)
-        const analysis = await state.analyzer.analyzeIncremental(filesToAnalyze)
-        await state.generator.generate(analysis)
-        filesToAnalyze.forEach(f => state.recentChanges.add(f))
-      } else {
-        log(`Full re-analysis (${reason})...`)
-        const analysis = await state.analyzer.analyze()
-        await state.generator.generate(analysis)
-        state.recentChanges.clear()
-      }
-      
-      state.lastAnalysis = new Date()
-      const latestAnalysis = await state.analyzer.getLastAnalysis()
-      if (latestAnalysis) {
-        state.server.broadcastUpdate(latestAnalysis)
-      }
-    }, debounceMs)
-  }
 
   const hooks: Hooks = {
     event: async ({ event }) => {
       if (event.type === "server.instance.disposed") {
         log("Shutting down...")
-        if (debounceTimer) clearTimeout(debounceTimer)
-        state.server.stop()
-        log("Shutdown complete")
+        globalWorker?.terminate()
+        globalWorker = null
+        globalServer?.stop()
+        globalServer = null
+        globalClient = null
       }
-    },
-
-    "tool.execute.before": async (input, output) => {
-      if (FILE_MODIFYING_TOOLS.some(t => input.tool?.includes(t))) {
-        pendingToolCalls.set(input.callID, output.args)
-      }
-    },
-
-    "tool.execute.after": async (input, _output) => {
-      if (FILE_MODIFYING_TOOLS.some(t => input.tool?.includes(t))) {
-        const args = pendingToolCalls.get(input.callID)
-        pendingToolCalls.delete(input.callID)
-        
-        const changedFiles = extractFilePaths(input.tool || '', args, workspaceDir)
-        await triggerReanalysis(`tool: ${input.tool}`, changedFiles)
+      
+      if (event.type === "session.compacted") {
+        const sessionId = (event as any).properties?.sessionID
+        if (sessionId && globalClient) {
+          log(`Session ${sessionId} compacted, triggering diagram update`)
+          await triggerDiagramUpdateSubtask(sessionId)
+        }
       }
     },
 
     "experimental.session.compacting": async (_input, output) => {
-      const recentList = Array.from(state.recentChanges).slice(0, 10)
-      const recentStr = recentList.length > 0 
-        ? `Recently modified: ${recentList.join(', ')}${state.recentChanges.size > 10 ? ` (+${state.recentChanges.size - 10} more)` : ''}`
-        : ''
-      
-      output.context.push(
-        `[Cartograph Architecture Context]\n` +
-        `Visualization: http://localhost:${port}\n` +
-        `Last analysis: ${state.lastAnalysis?.toISOString() || 'pending'}\n` +
-        `${recentStr}\n` +
-        `See .architecture/graph.json for dependency graph, .architecture/maps/ for layer docs.`
-      )
-      
-      state.recentChanges.clear()
+      const context = buildDiagramContext(lastAnalysis, currentDiagrams)
+      if (context) {
+        output.context.push(`[Cartograph Architecture]\n${context}\nView: http://localhost:${serverPort}`)
+      }
     },
 
-    "chat.message": async (input, _output) => {
-      if (input.agent === "user") {
-        const timeSinceLastAnalysis = state.lastAnalysis 
-          ? Date.now() - state.lastAnalysis.getTime() 
-          : Infinity
-        
-        const TEN_MINUTES = 10 * 60 * 1000
-        if (timeSinceLastAnalysis > TEN_MINUTES) {
-          await triggerReanalysis("stale analysis (>10min)")
+    "tool.execute.after": async (input, _output) => {
+      const fileModifyingTools = ["write", "Write", "edit", "Edit", "MultiEdit"]
+      if (fileModifyingTools.some(t => input.tool?.includes(t)) && globalWorker) {
+        const args = typeof _output.metadata === "object" ? _output.metadata : {}
+        const filePath = (args as any)?.filePath
+        if (filePath) {
+          log(`File changed: ${filePath}, triggering incremental analysis`)
+          globalWorker.postMessage({ 
+            type: "analyze", 
+            workspaceDir: directory,
+            files: [filePath]
+          })
         }
       }
+    },
+
+    tool: {
+      diagram_types: tool({
+        description: "List available diagram types and current diagrams",
+        args: {},
+        execute: async () => {
+          const types = Object.entries(DIAGRAM_TYPES).map(([key, cfg]) => ({
+            type: key,
+            label: cfg.label,
+          }))
+          return JSON.stringify({ 
+            types,
+            currentDiagrams: currentDiagrams?.diagrams.map(d => ({
+              id: d.id,
+              title: d.title,
+              isAuto: d.labels.includes("auto"),
+            })) || [],
+            viewUrl: `http://localhost:${serverPort}`,
+            analysisReady: !!lastAnalysis,
+          })
+        },
+      }),
+
+      diagram_context: tool({
+        description: "Get current codebase context for diagram generation. Use this to understand the codebase structure before generating diagrams.",
+        args: {},
+        execute: async () => {
+          return JSON.stringify({
+            analysis: lastAnalysis ? {
+              fileCount: lastAnalysis.files.length,
+              layers: lastAnalysis.layers,
+              topDomains: lastAnalysis.domains.slice(0, 10),
+              languages: [...new Set(lastAnalysis.files.map(f => f.language))],
+            } : null,
+            currentDiagrams: currentDiagrams?.diagrams.map(d => ({
+              id: d.id,
+              title: d.title,
+              category: d.category,
+              isAuto: d.labels.includes("auto"),
+            })) || [],
+            viewUrl: `http://localhost:${serverPort}`,
+          })
+        },
+      }),
+
+      diagram_update: tool({
+        description: "Create or update a diagram. The agent should generate the Mermaid syntax based on codebase understanding.",
+        args: {
+          type: tool.schema
+            .enum(["architecture", "dataflow", "sequence", "class", "state", "er", "dependency"])
+            .describe("Diagram type"),
+          mermaid: tool.schema.string().describe("Mermaid diagram syntax"),
+          description: tool.schema.string().optional().describe("What this diagram shows"),
+        },
+        execute: async ({ type, mermaid, description }) => {
+          const diagramType = type as DiagramType
+          const newDiagram = createDiagramRecord(diagramType, mermaid, description)
+          const existingDiagrams = currentDiagrams?.diagrams || []
+          const merged = mergeDiagrams(newDiagram, existingDiagrams)
+          
+          await saveDiagrams(merged, "update")
+
+          return JSON.stringify({ 
+            success: true, 
+            type: diagramType,
+            totalDiagrams: merged.length,
+            message: `Diagram updated - view at http://localhost:${serverPort}`,
+          })
+        },
+      }),
+
+      diagram_delete: tool({
+        description: "Delete a diagram by ID",
+        args: {
+          id: tool.schema.string().describe("Diagram ID to delete"),
+        },
+        execute: async ({ id }) => {
+          const existingDiagrams = currentDiagrams?.diagrams || []
+          const filtered = existingDiagrams.filter(d => d.id !== id)
+          
+          if (filtered.length === existingDiagrams.length) {
+            return JSON.stringify({ success: false, error: `Diagram '${id}' not found` })
+          }
+          
+          await saveDiagrams(filtered, "delete")
+          return JSON.stringify({ success: true, deleted: id })
+        },
+      }),
     },
   }
 

@@ -6,6 +6,8 @@ interface ViewTabsProps {
 }
 
 const TABS: { mode: ViewMode; label: string; icon: string }[] = [
+  { mode: 'command', label: 'Command Center', icon: '🛰️' },
+  { mode: 'story', label: 'Story', icon: '📖' },
   { mode: 'system', label: 'System', icon: '📦' },
   { mode: 'layers', label: 'Layers', icon: '📊' },
   { mode: 'files', label: 'Files', icon: '📄' },

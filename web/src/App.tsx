@@ -2,19 +2,23 @@ import { useState, useCallback } from 'react'
 import { ReactFlowProvider, useReactFlow } from '@xyflow/react'
 import { Header } from './components/Header'
 import { MapCanvas } from './components/MapCanvas'
+import { StoryView } from './components/StoryView'
+import { CommandCenter } from './components/CommandCenter'
 import { FilterPanel } from './components/FilterPanel'
 import { Sidebar } from './components/Sidebar'
 import { Breadcrumbs } from './components/Breadcrumbs'
 import { CommandPalette } from './components/CommandPalette'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useGraphData } from './hooks/useGraphData'
+import { useStoryData } from './hooks/useStoryData'
+import { useDiagrams } from './hooks/useDiagrams'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import { generateMermaidDiagram, generateLayerMermaid } from './lib/mermaid'
 import type { ViewMode, LayerType, GraphData } from './lib/types'
 
 function AppContent() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>('files')
+  const [viewMode, setViewMode] = useState<ViewMode>('command')
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [breadcrumbs, setBreadcrumbs] = useState<string[]>([])
   const [activeLayers, setActiveLayers] = useState<LayerType[]>([
@@ -22,7 +26,13 @@ function AppContent() {
   ])
   
   const { data: graphData, loading, error, refetch } = useGraphData()
-  const { connected, lastUpdate } = useWebSocket(refetch)
+  const { data: storyData, loading: storyLoading, refetch: refetchStory } = useStoryData()
+  const { data: diagramData, loading: diagramsLoading, refetch: refetchDiagrams } = useDiagrams()
+  const { connected, lastUpdate, recentChanges } = useWebSocket(() => {
+    refetch()
+    refetchStory()
+    refetchDiagrams()
+  })
   const reactFlowInstance = useReactFlow()
 
   const filteredData: GraphData | null = graphData ? {
@@ -121,13 +131,13 @@ function AppContent() {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen bg-bg-primary">
+      <div className="flex items-center justify-center h-screen bg-surface-0">
         <div className="text-center">
-          <h1 className="text-xl font-semibold text-red-400 mb-2">Failed to load graph</h1>
-          <p className="text-gray-500">{error}</p>
+          <h1 className="text-xl font-semibold text-status-error mb-2">Failed to load graph</h1>
+          <p className="text-content-muted">{error}</p>
           <button 
             onClick={refetch}
-            className="mt-4 px-4 py-2 bg-blue-600 rounded hover:bg-blue-700"
+            className="mt-4 px-4 py-2 bg-accent rounded hover:bg-accent-hover"
           >
             Retry
           </button>
@@ -137,7 +147,7 @@ function AppContent() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-bg-primary">
+    <div className="flex flex-col h-screen bg-surface-0">
       <Header 
         connected={connected} 
         fileCount={filteredData?.nodes.length ?? 0}
@@ -148,28 +158,42 @@ function AppContent() {
       />
 
       {breadcrumbs.length > 0 && (
-        <div className="px-6 py-2 bg-bg-secondary border-b border-border">
+        <div className="px-6 py-2 bg-surface-1 border-b border-border">
           <Breadcrumbs items={breadcrumbs} onNavigate={handleBreadcrumbNavigate} />
         </div>
       )}
       
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 relative">
-          <MapCanvas 
-            data={filteredData}
-            loading={loading}
-            onNodeClick={handleNodeClick}
-            selectedNode={selectedNode}
-            viewMode={viewMode}
-          />
-          <FilterPanel 
-            activeLayers={activeLayers}
-            onToggleLayer={handleToggleLayer}
-            onExport={handleExport}
-          />
+          {viewMode === 'command' ? (
+            <CommandCenter 
+              diagrams={diagramData}
+              loading={diagramsLoading}
+              connected={connected}
+              lastUpdate={lastUpdate}
+              recentChanges={recentChanges}
+            />
+          ) : viewMode === 'story' ? (
+            <StoryView story={storyData} loading={storyLoading} />
+          ) : (
+            <>
+              <MapCanvas 
+                data={filteredData}
+                loading={loading}
+                onNodeClick={handleNodeClick}
+                selectedNode={selectedNode}
+                viewMode={viewMode}
+              />
+              <FilterPanel 
+                activeLayers={activeLayers}
+                onToggleLayer={handleToggleLayer}
+                onExport={handleExport}
+              />
+            </>
+          )}
         </main>
         
-        {selectedNode && filteredData && (
+        {viewMode !== 'story' && viewMode !== 'command' && selectedNode && filteredData && (
           <Sidebar 
             nodeId={selectedNode}
             data={filteredData}
@@ -189,6 +213,10 @@ function AppContent() {
         onChangeView={handleViewChange}
         onExport={handleExport}
       />
+
+      <div className="fixed bottom-2 left-1/2 -translate-x-1/2 text-[10px] text-content-muted pointer-events-none">
+        Made by CloudShip AI Team
+      </div>
     </div>
   )
 }

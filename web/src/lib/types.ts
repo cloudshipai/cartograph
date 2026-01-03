@@ -30,7 +30,91 @@ export interface PackageNode {
   children: string[]
 }
 
-export type ViewMode = 'system' | 'layers' | 'files'
+export type ViewMode = 'command' | 'story' | 'system' | 'layers' | 'files'
+
+export type DiagramCategory = 
+  | "architecture" 
+  | "layers" 
+  | "flows" 
+  | "dependencies" 
+  | "patterns" 
+  | "domains"
+  | "insights"
+
+export interface Diagram {
+  id: string
+  category: DiagramCategory
+  title: string
+  description: string
+  mermaid: string
+  labels: string[]
+  priority: number
+}
+
+export interface DiagramSet {
+  generated: string
+  hash: string
+  diagrams: Diagram[]
+  summary: string
+}
+
+export interface EntryPoint {
+  type: 'api' | 'cli' | 'event' | 'cron' | 'websocket'
+  name: string
+  path: string
+  file: string
+  handler?: string
+}
+
+export interface FlowStep {
+  actor: string
+  action: string
+  target: string
+  description: string
+  file?: string
+}
+
+export interface Flow {
+  name: string
+  description: string
+  entryPoint: EntryPoint
+  steps: FlowStep[]
+  mermaid: string
+}
+
+export interface Domain {
+  name: string
+  description: string
+  layer: string
+  keyClasses: string[]
+  keyFunctions: string[]
+  files: { relativePath: string }[]
+}
+
+export interface LayerSummary {
+  name: string
+  description: string
+  fileCount: number
+  keyComponents: string[]
+  mermaid: string
+}
+
+export interface ArchitectureStory {
+  title: string
+  summary: string
+  generated: string
+  stats: {
+    totalFiles: number
+    domains: number
+    entryPoints: number
+    flows: number
+  }
+  domains: Domain[]
+  flows: Flow[]
+  layers: LayerSummary[]
+  systemDiagram: string
+  layerDiagram: string
+}
 
 export interface ViewState {
   mode: ViewMode

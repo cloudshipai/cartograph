@@ -5,14 +5,21 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "cartograph": "dist/cli.js"
+  },
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target bun && cd web && npm run build",
-    "build:plugin": "bun build src/index.ts --outdir dist --target bun",
+    "build": "bun build src/index.ts --outdir dist --target bun && bun build src/worker/analyzer.worker.ts --outdir dist/worker --target bun && bun build src/cli.ts --outdir dist --target bun && cd web && bun run build",
+    "build:plugin": "bun build src/index.ts --outdir dist --target bun && bun build src/worker/analyzer.worker.ts --outdir dist/worker --target bun && bun build src/cli.ts --outdir dist --target bun",
     "build:web": "cd web && npm run build",
     "dev": "bun --watch src/index.ts",
     "dev:web": "cd web && npm run dev",
     "typecheck": "tsc --noEmit",
-    "postinstall": "cd web && npm install"
+    "prepublishOnly": "bun run build",
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test tests/integration",
+    "test:watch": "bun test --watch"
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.0.0",
@@ -30,16 +37,29 @@
   ],
   "keywords": [
     "opencode",
+    "opencode-plugin",
     "plugin",
     "architecture",
     "visualization",
     "codebase",
-    "mapping"
+    "mapping",
+    "mermaid",
+    "diagrams"
   ],
   "author": "CloudShip AI",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/cloudshipai/cartograph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cloudshipai/cartograph/issues"
+  },
+  "homepage": "https://github.com/cloudshipai/cartograph#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
