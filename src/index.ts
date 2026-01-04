@@ -4,14 +4,14 @@ import { tool } from "@opencode-ai/plugin"
 import { log, logError } from "./logger"
 import { CartographServer } from "./server"
 import { join, dirname } from "path"
-import { realpathSync } from "fs"
+import { realpathSync, existsSync } from "fs"
+import { homedir } from "os"
 import {
   DIAGRAM_TYPES,
   generateDiagramsFromAnalysis,
   buildDiagramContext,
   createDiagramRecord,
   mergeDiagrams,
-  mapTypeToCategory,
   type DiagramType,
   type DiagramRecord,
   type DiagramSet,
@@ -19,6 +19,10 @@ import {
 } from "./diagrams"
 
 type OpencodeClient = ReturnType<typeof createOpencodeClient>
+
+// Singleton state - prevents multiple initializations
+let isInitialized = false
+let initializingDirectory: string | null = null
 
 let globalServer: CartographServer | null = null
 let globalWorker: Worker | null = null
@@ -28,7 +32,53 @@ let currentDiagrams: DiagramSet | null = null
 let architectureDir: string = ""
 let serverPort: number = 3333
 
+// Max files to analyze (sanity limit)
+const MAX_FILES_LIMIT = 10000
 
+/**
+ * Validate that the directory is a reasonable project directory
+ * Returns error message if invalid, null if valid
+ */
+function validateDirectory(directory: string): string | null {
+  // Check if it's the home directory or a parent of home
+  const home = homedir()
+  const resolvedDir = realpathSync(directory)
+  const resolvedHome = realpathSync(home)
+  
+  if (resolvedDir === resolvedHome) {
+    return `Directory is home directory (${home}). Cartograph only works in project directories.`
+  }
+  
+  // Check if home is inside the directory (meaning directory is a parent of home)
+  if (resolvedHome.startsWith(resolvedDir + "/")) {
+    return `Directory (${directory}) contains home directory. Cartograph only works in project directories.`
+  }
+  
+  // Check for common project indicators
+  const projectIndicators = [
+    "package.json",
+    "Cargo.toml", 
+    "go.mod",
+    "pyproject.toml",
+    "requirements.txt",
+    ".git",
+    "Makefile",
+    "CMakeLists.txt",
+    "pom.xml",
+    "build.gradle",
+    ".opencode",
+  ]
+  
+  const hasProjectIndicator = projectIndicators.some(indicator => 
+    existsSync(join(directory, indicator))
+  )
+  
+  if (!hasProjectIndicator) {
+    return `Directory (${directory}) doesn't appear to be a project directory. No package.json, .git, or other project files found.`
+  }
+  
+  return null
+}
 
 async function loadExistingDiagrams(): Promise<void> {
   try {
@@ -127,12 +177,46 @@ async function findAvailablePort(startPort: number): Promise<number> {
   return startPort
 }
 
+function cleanup(): void {
+  globalWorker?.terminate()
+  globalWorker = null
+  globalServer?.stop()
+  globalServer = null
+  globalClient = null
+  isInitialized = false
+  initializingDirectory = null
+}
+
 const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
   const { directory, client } = input
-  architectureDir = join(directory, ".architecture")
 
+  // Singleton guard - prevent multiple initializations
+  if (isInitialized && initializingDirectory === directory) {
+    log(`Already initialized for ${directory}, returning existing hooks`)
+    return createHooks(directory)
+  }
+  
+  if (isInitialized && initializingDirectory !== directory) {
+    log(`Already initialized for different directory (${initializingDirectory}), cleaning up first`)
+    cleanup()
+  }
+
+  const validationError = validateDirectory(directory)
+  if (validationError) {
+    logError(validationError)
+    // Return minimal hooks that do nothing
+    return {
+      event: async () => {},
+      tool: {},
+    }
+  }
+
+  isInitialized = true
+  initializingDirectory = directory
+  architectureDir = join(directory, ".architecture")
   globalClient = client
-  log("Cartograph initializing")
+  
+  log(`Cartograph initializing for: ${directory}`)
 
   setImmediate(async () => {
     try {
@@ -148,6 +232,13 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
       globalWorker = createWorker()
       globalWorker.onmessage = async (event) => {
         const analysis = event.data as AnalysisResult
+        
+        // Sanity check on file count
+        if (analysis.files.length > MAX_FILES_LIMIT) {
+          logError(`Analysis returned ${analysis.files.length} files, exceeds limit of ${MAX_FILES_LIMIT}. Skipping.`)
+          return
+        }
+        
         lastAnalysis = analysis
         log(`Analysis complete: ${analysis.files.length} files`)
         
@@ -170,22 +261,23 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
         globalServer?.broadcast(JSON.stringify({ type: "analysis", data: lastAnalysis }))
       }
 
-      globalWorker.postMessage({ type: "analyze", workspaceDir: directory })
+      globalWorker.postMessage({ type: "analyze", workspaceDir: directory, maxFiles: MAX_FILES_LIMIT })
       log("Initial analysis started in worker")
     } catch (err) {
       logError("Init failed", err)
+      cleanup()
     }
   })
 
+  return createHooks(directory)
+}
+
+function createHooks(directory: string): Hooks {
   const hooks: Hooks = {
     event: async ({ event }) => {
       if (event.type === "server.instance.disposed") {
         log("Shutting down...")
-        globalWorker?.terminate()
-        globalWorker = null
-        globalServer?.stop()
-        globalServer = null
-        globalClient = null
+        cleanup()
       }
       
       if (event.type === "session.compacted") {
@@ -214,7 +306,8 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
           globalWorker.postMessage({ 
             type: "analyze", 
             workspaceDir: directory,
-            files: [filePath]
+            files: [filePath],
+            maxFiles: MAX_FILES_LIMIT,
           })
         }
       }

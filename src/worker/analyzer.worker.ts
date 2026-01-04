@@ -7,6 +7,7 @@ interface AnalyzeRequest {
   type: "analyze"
   workspaceDir: string
   files?: string[]
+  maxFiles?: number
 }
 
 interface AnalyzeResult {
@@ -15,6 +16,7 @@ interface AnalyzeResult {
   layers: Record<string, number>
   domains: DomainInfo[]
   timestamp: string
+  truncated?: boolean
 }
 
 interface FileInfo {
@@ -33,9 +35,13 @@ interface DomainInfo {
   layer: string
 }
 
+const DEFAULT_MAX_FILES = 10000
+
 const IGNORE_DIRS = new Set([
   "node_modules", ".git", ".architecture", "dist", "build", 
-  "__pycache__", ".next", ".venv", "venv", ".cache"
+  "__pycache__", ".next", ".venv", "venv", ".cache",
+  "vendor", "target", ".idea", ".vscode", "coverage",
+  ".terraform", ".serverless", ".aws-sam"
 ])
 
 const EXTENSIONS: Record<string, string> = {
@@ -53,29 +59,43 @@ const LAYER_PATTERNS: [RegExp, string][] = [
   [/\/(tests?|__tests__|spec)\//i, "test"],
 ]
 
-async function collectFiles(dir: string, base: string = dir): Promise<string[]> {
-  const files: string[] = []
+async function collectFiles(
+  dir: string, 
+  base: string, 
+  maxFiles: number,
+  collected: string[] = []
+): Promise<{ files: string[], truncated: boolean }> {
+  if (collected.length >= maxFiles) {
+    return { files: collected, truncated: true }
+  }
   
   try {
     const entries = await readdir(dir, { withFileTypes: true })
     
     for (const entry of entries) {
+      if (collected.length >= maxFiles) {
+        return { files: collected, truncated: true }
+      }
+      
       if (entry.name.startsWith(".") || IGNORE_DIRS.has(entry.name)) continue
       
       const fullPath = join(dir, entry.name)
       
       if (entry.isDirectory()) {
-        files.push(...await collectFiles(fullPath, base))
+        const result = await collectFiles(fullPath, base, maxFiles, collected)
+        if (result.truncated) {
+          return result
+        }
       } else {
         const ext = extname(entry.name)
         if (EXTENSIONS[ext]) {
-          files.push(fullPath.replace(base + "/", ""))
+          collected.push(fullPath.replace(base + "/", ""))
         }
       }
     }
   } catch {}
   
-  return files
+  return { files: collected, truncated: false }
 }
 
 function detectLayer(path: string): string {
@@ -154,9 +174,19 @@ function detectDomains(files: FileInfo[]): DomainInfo[] {
 }
 
 self.onmessage = async (event: MessageEvent<AnalyzeRequest>) => {
-  const { workspaceDir, files: targetFiles } = event.data
+  const { workspaceDir, files: targetFiles, maxFiles = DEFAULT_MAX_FILES } = event.data
   
-  const filePaths = targetFiles || await collectFiles(workspaceDir)
+  let filePaths: string[]
+  let truncated = false
+  
+  if (targetFiles) {
+    filePaths = targetFiles
+  } else {
+    const result = await collectFiles(workspaceDir, workspaceDir, maxFiles)
+    filePaths = result.files
+    truncated = result.truncated
+  }
+  
   const files: FileInfo[] = []
   
   for (const path of filePaths) {
@@ -175,6 +205,7 @@ self.onmessage = async (event: MessageEvent<AnalyzeRequest>) => {
     layers,
     domains: detectDomains(files),
     timestamp: new Date().toISOString(),
+    ...(truncated ? { truncated: true } : {}),
   }
   
   self.postMessage(result)
