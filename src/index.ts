@@ -23,6 +23,7 @@ type OpencodeClient = ReturnType<typeof createOpencodeClient>
 // Singleton state - prevents multiple initializations
 let isInitialized = false
 let initializingDirectory: string | null = null
+let detectedWorkspace: string | null = null
 
 let globalServer: CartographServer | null = null
 let globalWorker: Worker | null = null
@@ -185,6 +186,86 @@ function cleanup(): void {
   globalClient = null
   isInitialized = false
   initializingDirectory = null
+  detectedWorkspace = null
+}
+
+function detectProjectRoot(filePath: string): string | null {
+  const projectIndicators = ["package.json", "Cargo.toml", "go.mod", "pyproject.toml", ".git"]
+  let dir = dirname(filePath)
+  const home = homedir()
+  
+  while (dir && dir !== "/" && dir !== home) {
+    for (const indicator of projectIndicators) {
+      if (existsSync(join(dir, indicator))) {
+        return dir
+      }
+    }
+    dir = dirname(dir)
+  }
+  return null
+}
+
+async function initializeForWorkspace(workspace: string): Promise<void> {
+  if (detectedWorkspace === workspace) return
+  
+  const validationError = validateDirectory(workspace)
+  if (validationError) {
+    logError(validationError)
+    return
+  }
+  
+  log(`Detected workspace: ${workspace}`)
+  detectedWorkspace = workspace
+  architectureDir = join(workspace, ".architecture")
+  
+  await Bun.write(join(architectureDir, ".gitkeep"), "")
+  await loadExistingDiagrams()
+  
+  if (!globalServer) {
+    serverPort = await findAvailablePort(3333)
+    globalServer = new CartographServer(serverPort, architectureDir)
+    await globalServer.start()
+    log(`Server ready at http://localhost:${serverPort}`)
+    openBrowser(`http://localhost:${serverPort}`)
+  }
+  
+  if (globalWorker) {
+    globalWorker.terminate()
+  }
+  
+  globalWorker = createWorker()
+  globalWorker.onmessage = async (event) => {
+    const analysis = event.data as AnalysisResult
+    
+    if (analysis.files.length > MAX_FILES_LIMIT) {
+      logError(`Analysis returned ${analysis.files.length} files, exceeds limit of ${MAX_FILES_LIMIT}. Skipping.`)
+      return
+    }
+    
+    lastAnalysis = analysis
+    log(`Analysis complete: ${analysis.files.length} files`)
+    
+    await Bun.write(
+      join(architectureDir, "analysis.json"),
+      JSON.stringify(analysis, null, 2)
+    )
+    
+    const autoDiagrams = generateDiagramsFromAnalysis(analysis)
+    if (autoDiagrams.length > 0) {
+      const existingNonAuto = currentDiagrams?.diagrams.filter(
+        d => !d.labels.includes("auto")
+      ) || []
+      
+      const merged = [...autoDiagrams, ...existingNonAuto]
+      await saveDiagrams(merged, "analysis")
+      log(`Auto-generated ${autoDiagrams.length} diagrams from analysis`)
+    }
+    
+    globalServer?.broadcast(JSON.stringify({ type: "analysis", data: lastAnalysis }))
+  }
+  
+  globalWorker.postMessage({ type: "analyze", workspaceDir: workspace, maxFiles: MAX_FILES_LIMIT })
+  log("Analysis started for workspace")
 }
 
 const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
@@ -193,7 +274,7 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
   // Singleton guard - prevent multiple initializations
   if (isInitialized && initializingDirectory === directory) {
     log(`Already initialized for ${directory}, returning existing hooks`)
-    return createHooks(directory)
+    return createHooks()
   }
   
   if (isInitialized && initializingDirectory !== directory) {
@@ -201,78 +282,29 @@ const plugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
     cleanup()
   }
 
-  const validationError = validateDirectory(directory)
-  if (validationError) {
-    logError(validationError)
-    // Return minimal hooks that do nothing
-    return {
-      event: async () => {},
-      tool: {},
-    }
-  }
-
   isInitialized = true
   initializingDirectory = directory
-  architectureDir = join(directory, ".architecture")
   globalClient = client
   
-  log(`Cartograph initializing for: ${directory}`)
+  log(`Cartograph initializing (will detect workspace from file operations)`)
 
-  setImmediate(async () => {
-    try {
-      await Bun.write(join(architectureDir, ".gitkeep"), "")
-      await loadExistingDiagrams()
-      
-      serverPort = await findAvailablePort(3333)
-      globalServer = new CartographServer(serverPort, architectureDir)
-      await globalServer.start()
-      log(`Server ready at http://localhost:${serverPort}`)
-      openBrowser(`http://localhost:${serverPort}`)
-
-      globalWorker = createWorker()
-      globalWorker.onmessage = async (event) => {
-        const analysis = event.data as AnalysisResult
-        
-        // Sanity check on file count
-        if (analysis.files.length > MAX_FILES_LIMIT) {
-          logError(`Analysis returned ${analysis.files.length} files, exceeds limit of ${MAX_FILES_LIMIT}. Skipping.`)
-          return
-        }
-        
-        lastAnalysis = analysis
-        log(`Analysis complete: ${analysis.files.length} files`)
-        
-        await Bun.write(
-          join(architectureDir, "analysis.json"),
-          JSON.stringify(analysis, null, 2)
-        )
-        
-        const autoDiagrams = generateDiagramsFromAnalysis(analysis)
-        if (autoDiagrams.length > 0) {
-          const existingNonAuto = currentDiagrams?.diagrams.filter(
-            d => !d.labels.includes("auto")
-          ) || []
-          
-          const merged = [...autoDiagrams, ...existingNonAuto]
-          await saveDiagrams(merged, "analysis")
-          log(`Auto-generated ${autoDiagrams.length} diagrams from analysis`)
-        }
-        
-        globalServer?.broadcast(JSON.stringify({ type: "analysis", data: lastAnalysis }))
+  const validationError = validateDirectory(directory)
+  if (!validationError) {
+    setImmediate(async () => {
+      try {
+        await initializeForWorkspace(directory)
+      } catch (err) {
+        logError("Init failed", err)
       }
+    })
+  } else {
+    log(`Waiting for file operations to detect workspace (${directory} is not a project)`)
+  }
 
-      globalWorker.postMessage({ type: "analyze", workspaceDir: directory, maxFiles: MAX_FILES_LIMIT })
-      log("Initial analysis started in worker")
-    } catch (err) {
-      logError("Init failed", err)
-      cleanup()
-    }
-  })
-
-  return createHooks(directory)
+  return createHooks()
 }
 
-function createHooks(directory: string): Hooks {
+function createHooks(): Hooks {
   const hooks: Hooks = {
     event: async ({ event }) => {
       if (event.type === "server.instance.disposed") {
@@ -297,18 +329,27 @@ function createHooks(directory: string): Hooks {
     },
 
     "tool.execute.after": async (input, _output) => {
-      const fileModifyingTools = ["write", "Write", "edit", "Edit", "MultiEdit"]
-      if (fileModifyingTools.some(t => input.tool?.includes(t)) && globalWorker) {
+      const fileModifyingTools = ["write", "Write", "edit", "Edit", "MultiEdit", "read", "Read"]
+      if (fileModifyingTools.some(t => input.tool?.includes(t))) {
         const args = typeof _output.metadata === "object" ? _output.metadata : {}
-        const filePath = (args as any)?.filePath
-        if (filePath) {
-          log(`File changed: ${filePath}, triggering incremental analysis`)
-          globalWorker.postMessage({ 
-            type: "analyze", 
-            workspaceDir: directory,
-            files: [filePath],
-            maxFiles: MAX_FILES_LIMIT,
-          })
+        const filePath = (args as any)?.filePath || (args as any)?.path
+        
+        if (filePath && typeof filePath === "string") {
+          const projectRoot = detectProjectRoot(filePath)
+          
+          if (projectRoot && projectRoot !== detectedWorkspace) {
+            await initializeForWorkspace(projectRoot)
+          }
+          
+          if (globalWorker && detectedWorkspace && input.tool?.match(/write|edit/i)) {
+            log(`File changed: ${filePath}, triggering incremental analysis`)
+            globalWorker.postMessage({ 
+              type: "analyze", 
+              workspaceDir: detectedWorkspace,
+              files: [filePath],
+              maxFiles: MAX_FILES_LIMIT,
+            })
+          }
         }
       }
     },
