@@ -28,16 +28,12 @@ jobs:
       - name: Install plugin dependencies
         run: npm install
 
-      - name: Build plugin
-        run: npm run build
-
       - name: Install web UI dependencies
         run: npm install
         working-directory: web
 
-      - name: Build web UI
+      - name: Build plugin (includes web UI)
         run: npm run build
-        working-directory: web
 
       - name: Build and start test container
         run: docker compose up -d --build
