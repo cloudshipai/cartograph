@@ -329,8 +329,8 @@ function createHooks(): Hooks {
     },
 
     "tool.execute.after": async (input, _output) => {
-      const fileModifyingTools = ["write", "Write", "edit", "Edit", "MultiEdit", "read", "Read"]
-      if (fileModifyingTools.some(t => input.tool?.includes(t))) {
+      const fileTools = ["write", "Write", "edit", "Edit", "MultiEdit", "read", "Read"]
+      if (fileTools.some(t => input.tool?.includes(t))) {
         const args = typeof _output.metadata === "object" ? _output.metadata : {}
         const filePath = (args as any)?.filePath || (args as any)?.path
         
@@ -339,16 +339,6 @@ function createHooks(): Hooks {
           
           if (projectRoot && projectRoot !== detectedWorkspace) {
             await initializeForWorkspace(projectRoot)
-          }
-          
-          if (globalWorker && detectedWorkspace && input.tool?.match(/write|edit/i)) {
-            log(`File changed: ${filePath}, triggering incremental analysis`)
-            globalWorker.postMessage({ 
-              type: "analyze", 
-              workspaceDir: detectedWorkspace,
-              files: [filePath],
-              maxFiles: MAX_FILES_LIMIT,
-            })
           }
         }
       }
@@ -420,6 +410,32 @@ function createHooks(): Hooks {
             type: diagramType,
             totalDiagrams: merged.length,
             message: `Diagram updated - view at http://localhost:${serverPort}`,
+          })
+        },
+      }),
+
+      diagram_refresh: tool({
+        description: "Re-analyze the codebase and regenerate auto-diagrams. Use when significant code changes have been made.",
+        args: {},
+        execute: async () => {
+          if (!detectedWorkspace) {
+            return JSON.stringify({ success: false, error: "No workspace detected yet" })
+          }
+          if (!globalWorker) {
+            return JSON.stringify({ success: false, error: "Worker not initialized" })
+          }
+          
+          log("Manual refresh triggered")
+          globalWorker.postMessage({ 
+            type: "analyze", 
+            workspaceDir: detectedWorkspace, 
+            maxFiles: MAX_FILES_LIMIT 
+          })
+          
+          return JSON.stringify({ 
+            success: true, 
+            message: "Re-analysis started. Diagrams will update shortly.",
+            viewUrl: `http://localhost:${serverPort}`,
           })
         },
       }),
